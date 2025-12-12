@@ -81,9 +81,15 @@ func NewWithOptions(opts Options) (*GXR, error) {
 
 // Render renders a TSX page with the given props
 func (g *GXR) Render(page string, props map[string]interface{}) (string, error) {
-	pagePath := filepath.Join(g.options.SourceDir, page)
+	cleanPage := filepath.Clean(page)
+	pagePath := filepath.Join(g.options.SourceDir, cleanPage)
 
-	html, err := g.jsx.Render(pagePath, props)
+	absPath, err := filepath.Abs(pagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	html, err := g.jsx.Render(absPath, props)
 	if err != nil {
 		return "", fmt.Errorf("failed to render page: %w", err)
 	}
