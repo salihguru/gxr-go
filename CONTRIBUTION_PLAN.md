@@ -116,5 +116,5 @@ dataRegex := regexp.MustCompile(`<script[^>]*data-hid-data="(\d+)"[^>]*>(.*?)</s
 - [x] All tests pass
 - [x] No race conditions (`go test -race`)
 - [x] Benchmark shows improvement
-- [ ] CodeQL security scan passes
-- [ ] Code review approved
+- [x] CodeQL security scan passes
+- [x] Code review approved
