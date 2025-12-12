@@ -47,6 +47,8 @@ func wrapUseClientComponent(filePath string, code string) string {
 		code = exportFuncRegex.ReplaceAllString(code, "function "+funcName+"(")
 
 		// Add wrapper at the end with inline hydration data script
+		// Note: We escape </script> in the hydration data to prevent XSS attacks
+		// when the JSON contains user-controlled data with malicious script tags.
 		code = code + fmt.Sprintf(`
 
 // GXR: Auto-wrapped for SSR hydration
@@ -57,7 +59,8 @@ if (typeof globalThis.__HYDRATION_ID__ === "undefined") {
 function __GXR_Wrapper__(props) {
   if (typeof window === "undefined") {
     const id = globalThis.__HYDRATION_ID__++;
-    const hydrationData = JSON.stringify({ id, component: "%s", props });
+    // Escape </script> to prevent XSS - JSON.parse will handle the escape
+    const hydrationData = JSON.stringify({ id, component: "%s", props }).replace(/<\/script>/gi, '<\\/script>');
     return (
       <>
         <div data-hid={id}>

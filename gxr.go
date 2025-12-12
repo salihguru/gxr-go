@@ -27,6 +27,20 @@ import (
 	"github.com/zbysir/gojsx"
 )
 
+// Pre-compiled regex patterns for performance optimization.
+// Compiling these once at package initialization avoids the overhead
+// of re-compilation on every request.
+var (
+	// cleanupRegex matches inline hydration data scripts that should be removed
+	cleanupRegex = regexp.MustCompile(`<script[^>]*data-hid-data="[^"]*"[^>]*>.*?</script>`)
+
+	// dataRegex extracts hydration data from inline scripts
+	dataRegex = regexp.MustCompile(`<script[^>]*data-hid-data="(\d+)"[^>]*>(.*?)</script>`)
+
+	// scriptCloseRegex matches </script> tags (case-insensitive) for XSS prevention
+	scriptCloseRegex = regexp.MustCompile(`(?i)</script>`)
+)
+
 // GXR is the main framework instance
 type GXR struct {
 	jsx         *gojsx.Jsx
@@ -79,8 +93,17 @@ func NewWithOptions(opts Options) (*GXR, error) {
 	return g, nil
 }
 
-// Render renders a TSX page with the given props
-func (g *GXR) Render(page string, props map[string]interface{}) (string, error) {
+// Render renders a TSX page with the given props.
+// It includes panic recovery to prevent server crashes from component errors.
+func (g *GXR) Render(page string, props map[string]interface{}) (html string, err error) {
+	// Recover from panics in user component code to prevent server crashes
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("render panic recovered: %v", r)
+			html = ""
+		}
+	}()
+
 	cleanPage := filepath.Clean(page)
 	pagePath := filepath.Join(g.options.SourceDir, cleanPage)
 
@@ -89,7 +112,7 @@ func (g *GXR) Render(page string, props map[string]interface{}) (string, error) 
 		return "", fmt.Errorf("failed to resolve path: %w", err)
 	}
 
-	html, err := g.jsx.Render(absPath, props)
+	html, err = g.jsx.Render(absPath, props)
 	if err != nil {
 		return "", fmt.Errorf("failed to render page: %w", err)
 	}
@@ -137,13 +160,16 @@ func (g *GXR) injectHydrationScripts(html string) string {
 		return html
 	}
 
-	// Remove inline hydration data scripts
-	cleanupRegex := regexp.MustCompile(`<script[^>]*data-hid-data="[^"]*"[^>]*>.*?</script>`)
+	// Remove inline hydration data scripts (using pre-compiled regex)
 	html = cleanupRegex.ReplaceAllString(html, "")
+
+	// Escape the hydration data to prevent XSS attacks.
+	// If the JSON contains "</script>", it could break out of the script tag.
+	safeHydrationData := escapeScriptContent(hydrationData)
 
 	// Create script tags to inject
 	scripts := fmt.Sprintf(`<script id="__HYDRATION_DATA__" type="application/json">%s</script>
-<script type="module" src="%s/hydrate.js"></script>`, hydrationData, g.options.PublicPath)
+<script type="module" src="%s/hydrate.js"></script>`, safeHydrationData, g.options.PublicPath)
 
 	// Inject before </body>
 	if idx := strings.LastIndex(html, "</body>"); idx != -1 {
@@ -153,9 +179,22 @@ func (g *GXR) injectHydrationScripts(html string) string {
 	return html
 }
 
+// escapeScriptContent escapes content to be safely embedded in a <script> tag.
+// This prevents XSS attacks where malicious props could contain "</script>".
+func escapeScriptContent(s string) string {
+	// Replace </script> (case-insensitive) with escaped version.
+	// In JSON, we can use Unicode escapes: </script> becomes <\/script>
+	// This is safe because JSON parsers will decode \/ as /
+	// Uses pre-compiled case-insensitive regex for performance.
+	return scriptCloseRegex.ReplaceAllStringFunc(s, func(match string) string {
+		// Preserve the original case but escape the forward slash
+		return strings.Replace(match, "/", `\/`, 1)
+	})
+}
+
 // extractHydrationData finds all hydration markers and builds JSON array
 func extractHydrationData(html string) string {
-	dataRegex := regexp.MustCompile(`<script[^>]*data-hid-data="(\d+)"[^>]*>(.*?)</script>`)
+	// Use pre-compiled regex for performance
 	matches := dataRegex.FindAllStringSubmatch(html, -1)
 
 	if len(matches) == 0 {
